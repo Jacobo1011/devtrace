@@ -1,16 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import psutil
-
-app = FastAPI()
-
-history = []
-
+import asyncio
+import threading
+import time
 from datetime import datetime
 
-@app.get("/history")
-def get_history():
-    return history
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,12 +16,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+history = []
+boot_time = psutil.boot_time()
+
+# -------------------------
+# METRICS CORE
+# -------------------------
+
 def get_metrics():
+    net = psutil.net_io_counters()
+
     return {
         "cpu": psutil.cpu_percent(),
         "memory": psutil.virtual_memory().percent,
-        "disk": psutil.disk_usage("C:\\").percent
+        "disk": psutil.disk_usage("C:\\").percent if psutil.WINDOWS else psutil.disk_usage("/").percent,
+
+        # RED (bytes enviados/recibidos)
+        "network": {
+            "sent_mb": round(net.bytes_sent / 1024 / 1024, 2),
+            "recv_mb": round(net.bytes_recv / 1024 / 1024, 2),
+        },
+
+        # UPTIME
+        "uptime_seconds": int(time.time() - boot_time),
     }
+
+# -------------------------
+# ROUTES
+# -------------------------
 
 @app.get("/")
 def root():
@@ -35,58 +53,90 @@ def root():
 def metrics():
     return get_metrics()
 
+@app.get("/history")
+def get_history():
+    return history
+
+# -------------------------
+# ALERTS
+# -------------------------
+
+@app.get("/alerts")
+def alerts():
+    m = get_metrics()
+    out = []
+
+    if m["cpu"] > 80:
+        out.append("HIGH CPU USAGE")
+
+    if m["memory"] > 85:
+        out.append("HIGH MEMORY USAGE")
+
+    if m["disk"] > 90:
+        out.append("DISK SPACE CRITICAL")
+
+    return out
+
+# -------------------------
+# PROCESSES
+# -------------------------
+
 @app.get("/processes")
 def processes():
-    process_list = []
+    result = []
 
-    for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info', 'status']):
+    for p in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info', 'status']):
         try:
-            process_list.append({
-                "pid": proc.info["pid"],
-                "name": proc.info["name"],
-                "cpu": proc.info["cpu_percent"],
-                "memory": round(proc.info["memory_info"].rss / 1024 / 1024, 2),
-                "status": proc.info["status"]
+            result.append({
+                "pid": p.info["pid"],
+                "name": p.info["name"],
+                "cpu": p.info["cpu_percent"],
+                "memory": round(p.info["memory_info"].rss / 1024 / 1024, 2),
+                "status": p.info["status"]
             })
         except:
             pass
 
-    return sorted(process_list, key=lambda x: x["memory"], reverse=True)[:20]
+    return sorted(result, key=lambda x: x["memory"], reverse=True)[:20]
 
-@app.get("/alerts")
-def alerts():
-    metrics = get_metrics()
-    alerts = []
+# -------------------------
+# WEBSOCKET REALTIME
+# -------------------------
 
-    if metrics["cpu"] > 80:
-        alerts.append("HIGH CPU USAGE")
+@app.websocket("/ws/live")
+async def ws_live(ws: WebSocket):
+    await ws.accept()
 
-    if metrics["memory"] > 85:
-        alerts.append("HIGH MEMORY USAGE")
+    try:
+        while True:
+            m = get_metrics()
+            await ws.send_json(m)
+            await asyncio.sleep(1)
 
-    if metrics["disk"] > 90:
-        alerts.append("DISK SPACE CRITICAL")
+    except WebSocketDisconnect:
+        print("disconnected")
 
-    return alerts
+# -------------------------
+# HISTORY COLLECTOR
+# -------------------------
 
-import threading
-import time
-
-def collect_metrics():
+def collector():
     while True:
-        metrics = get_metrics()
+        m = get_metrics()
 
         history.append({
-            "cpu": metrics["cpu"],
-            "memory": metrics["memory"],
-            "disk": metrics["disk"],
+            "cpu": m["cpu"],
+            "memory": m["memory"],
+            "disk": m["disk"],
+            "net_sent": m["network"]["sent_mb"],
+            "net_recv": m["network"]["recv_mb"],
+            "uptime": m["uptime_seconds"],
             "time": datetime.now().strftime("%H:%M:%S")
         })
 
-        # evita crecer infinito
-        if len(history) > 100:
+        if len(history) > 120:
             history.pop(0)
 
         time.sleep(2)
 
-threading.Thread(target=collect_metrics, daemon=True).start()
+threading.Thread(target=collector, daemon=True).start()
