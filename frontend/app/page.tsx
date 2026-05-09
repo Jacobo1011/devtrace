@@ -2,81 +2,98 @@
 
 import { useEffect, useState } from "react";
 
-type Metrics = {
-  cpu: number;
-  memory: number;
-  disk: number;
-};
-
 export default function Home() {
-  const [metrics, setMetrics] = useState<Metrics>({
-    cpu: 0,
-    memory: 0,
-    disk: 0,
-  });
+  const [metrics, setMetrics] = useState<any>({});
+  const [processes, setProcesses] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<string[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
 
   useEffect(() => {
-    const fetchMetrics = async () => {
-      const res = await fetch("http://localhost:8000/metrics");
-      const data = await res.json();
-      setMetrics(data);
+    const fetchData = async () => {
+      const [metricsRes, processRes, alertRes, historyRes] =
+        await Promise.all([
+          fetch("http://127.0.0.1:8000/metrics"),
+          fetch("http://127.0.0.1:8000/processes"),
+          fetch("http://127.0.0.1:8000/alerts"),
+          fetch("http://127.0.0.1:8000/history"),
+        ]);
+
+      setMetrics(await metricsRes.json());
+      setProcesses(await processRes.json());
+      setAlerts(await alertRes.json());
+      setHistory(await historyRes.json());
     };
 
-    fetchMetrics();
-    const interval = setInterval(fetchMetrics, 2000);
+    fetchData();
+    const interval = setInterval(fetchData, 2000);
 
     return () => clearInterval(interval);
   }, []);
 
-  const getStatus = (value: number) => {
-    if (value > 80) return "High";
-    if (value > 50) return "Moderate";
-    return "Stable";
-  };
+  return (
+    <main className="p-10 bg-black min-h-screen text-white">
+      <h1 className="text-5xl font-bold mb-2">DevTrace</h1>
+      <p className="text-gray-400 mb-8">Real-time observability dashboard</p>
 
-  const MetricCard = ({
-    title,
-    value,
-  }: {
-    title: string;
-    value: number;
-  }) => (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-lg">
-      <h2 className="text-zinc-400 text-sm uppercase tracking-wider">
-        {title}
-      </h2>
+      {alerts.length > 0 && (
+        <div className="bg-red-900 p-4 rounded mb-8">
+          <h2 className="text-xl font-bold mb-2">ALERTS</h2>
+          {alerts.map((a, i) => (
+            <div key={i}>{a}</div>
+          ))}
+        </div>
+      )}
 
-      <p className="text-5xl font-bold mt-4">{value}%</p>
-
-      <div className="w-full bg-zinc-800 rounded-full h-3 mt-5 overflow-hidden">
-        <div
-          className="h-3 rounded-full transition-all duration-700"
-          style={{ width: `${value}%` }}
-        />
+      <div className="grid grid-cols-3 gap-6 mb-10">
+        <MetricCard title="CPU" value={`${metrics.cpu}%`} />
+        <MetricCard title="Memory" value={`${metrics.memory}%`} />
+        <MetricCard title="Disk" value={`${metrics.disk}%`} />
       </div>
 
-      <p className="mt-4 text-sm text-zinc-400">
-        Status: {getStatus(value)}
-      </p>
-    </div>
-  );
+      <h2 className="text-2xl font-bold mb-4">Process Explorer</h2>
 
-  return (
-    <main className="min-h-screen bg-black text-white p-10">
-      <div className="max-w-6xl mx-auto">
-        <header className="mb-12">
-          <h1 className="text-6xl font-bold tracking-tight">DevTrace</h1>
-          <p className="text-zinc-400 mt-3 text-lg">
-            Real-time system monitoring dashboard
-          </p>
-        </header>
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="bg-gray-900">
+            <th className="p-2">PID</th>
+            <th>Name</th>
+            <th>CPU</th>
+            <th>RAM</th>
+            <th>Status</th>
+          </tr>
+        </thead>
 
-        <section className="grid md:grid-cols-3 gap-8">
-          <MetricCard title="CPU Usage" value={metrics.cpu} />
-          <MetricCard title="Memory Usage" value={metrics.memory} />
-          <MetricCard title="Disk Usage" value={metrics.disk} />
-        </section>
+        <tbody>
+          {processes.map((proc) => (
+            <tr key={proc.pid} className="border-b border-gray-800">
+              <td className="p-2">{proc.pid}</td>
+              <td>{proc.name}</td>
+              <td>{proc.cpu}%</td>
+              <td>{proc.memory} MB</td>
+              <td>{proc.status}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h2 className="text-2xl font-bold mt-10 mb-4">History (CPU)</h2>
+
+      <div className="bg-gray-900 p-4 rounded">
+        {history.map((h, i) => (
+          <div key={i} className="text-sm">
+            {h.time} → CPU: {h.cpu}% | RAM: {h.memory}%
+          </div>
+        ))}
       </div>
     </main>
+  );
+}
+
+function MetricCard({ title, value }: any) {
+  return (
+    <div className="bg-gray-900 p-6 rounded-xl">
+      <h3 className="text-gray-400">{title}</h3>
+      <p className="text-3xl font-bold mt-2">{value}</p>
+    </div>
   );
 }
